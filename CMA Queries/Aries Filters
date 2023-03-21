@@ -1,0 +1,97 @@
+with bc as (select GTIN,
+                   min(PRICE) as comp_price
+            from ANALYTICS.FWS_STAGING.BLACKCURVE_RECENT_COMPETITOR_PRICES
+            group by 1),
+
+aries as (select PRODUCT_ID,
+                   lpad(upc::int, 14, 0) as salsify_gtin,
+                   VENDOR_ID,
+                   GP_SKU,
+                   WEB_SUPER_CATEGORY,
+                   WEB_CATEGORY,a
+                   WEB_SUB_CATEGORY as web_sub_cat,
+                   round(WEB_PRICE_MSRP,2) as list_price,
+                   PURCHASING_MULTIPLIER,
+                   round(VAR_COST,2) as fws_cost,
+                   round((WEB_PRICE/WEB_PRICE_MSRP),2) as fws_web_discount,
+                   round((WEB_PRICE - VAR_COST)/WEB_PRICE, 2) as fws_margin,
+                   WEB_PRICE,
+                   comp_price,
+                   round(WEB_PRICE - comp_price,2) as competitor_price_diff,
+                   comp_price / list_price as market_price_index,
+                   case when WEB_PRICE > comp_price then 'fws above comp'
+                        when WEB_PRICE < comp_price then 'fws below comp'
+                        when WEB_PRICE = comp_price then 'same as comp'
+                        when  comp_price is null then 'no comp price' end as competitor_comparison,
+                   case when market_price_index > 1 then '<list'
+                        when market_price_index < 0.1 then '<0.1'
+                        when market_price_index is null then null
+                        else 'in-range' end as index_check
+            from ANALYTICS.FWS_STAGING.STATIC_SALSIFY_BASIC as salsify
+            left join bc on bc.GTIN = lpad(salsify.UPC::int, 14, 0)
+            where salsify.manufacturer = 'Aries'
+            and QUANTITY = 1),
+
+    super_cat_index as (select WEB_SUPER_CATEGORY,
+                               avg(market_price_index) as super_cat_price_index
+                        from aries
+                        where market_price_index > 0
+                        and index_check = 'in-range'
+                        group by 1),
+
+category_price_index as (select WEB_CATEGORY,
+                               avg(market_price_index) as cat_price_index
+                        from aries
+                        where market_price_index > 0
+                        and WEB_CATEGORY is not null
+                        and index_check = 'in-range'
+                        group by 1),
+
+subcat_price_index as (select web_sub_cat,
+                              avg(market_price_index) as sub_price_index
+                       from aries
+                       where market_price_index > 0
+                       and index_check = 'in-range'
+                       group by 1 )
+
+select PRODUCT_ID,
+       salsify_gtin,
+       VENDOR_ID,
+       GP_SKU,
+       aries.WEB_SUPER_CATEGORY,
+       aries.WEB_CATEGORY,
+       aries.web_sub_cat,
+       list_price,
+       PURCHASING_MULTIPLIER,
+       fws_web_discount,
+       fws_cost,
+       fws_margin,
+       WEB_PRICE,
+       comp_price,
+       competitor_price_diff,
+            case when market_price_index is not null then round(market_price_index,10)
+                 when market_price_index is null then
+                    coalesce(
+                            round(sub_price_index, 10),
+                            round(cat_price_index, 10),
+                            round(super_cat_price_index, 10),
+                            coalesce(super_cat_price_index, 0)
+                        )
+                end as final_market_index,
+       case when market_price_index is not null then 'SKU'
+            when sub_price_index is not null then 'Sub Category'
+            when cat_price_index is not null then 'Category'
+            when super_cat_price_index is not null then 'Super Category'
+            when super_cat_price_index is null then 'Manual'
+            end as index_type,
+       competitor_comparison,
+       ifnull(index_check, 'no comp price') as comp_index_check,
+       case when index_type <> 'SKU' and salsify_gtin is not null then 'has gtin but no comp' -- not enough comp data from gtin
+           when final_market_index = 0 then 'manual market check'
+           when index_type = 'SKU' then 'use comp'
+           else 'use avg index' end as action -- some skus have good gtins but there were no price matches from the bc table
+from aries
+left join subcat_price_index as sub on sub.web_sub_cat = aries.web_sub_cat
+left join category_price_index  as cat on cat.WEB_CATEGORY = aries.WEB_CATEGORY
+left join super_cat_index as super on super.WEB_SUPER_CATEGORY = aries.WEB_SUPER_CATEGORY
+order by fws_margin asc

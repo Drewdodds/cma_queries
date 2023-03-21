@@ -1,0 +1,37 @@
+with product_rev as (select ITEM_NUMBER,(sum(ALLOCATED_DOCUMENT_SUBTOTAL)/2) as annualized_rev
+from FWS_CORE.SALES_ITEM_LEVEL
+where PRIMARY_VENDOR in ('N-PENTAIR003',
+'N-PENTAIR004',
+'N-PENTAIREVC',
+'N-PENTAIRSHURFL')
+and document_date between '6/1/2019' and '6/1/2021'
+and ORDER_TYPE in('return','invoice')
+and VOID_STATUS <>'Voided'
+group by ITEM_NUMBER) ,
+/*cal_top_80 as (select *
+,sum(annualized_rev) over(order by annualized_rev desc,ITEM_NUMBER) as running_sum
+,sum(annualized_rev) over() as total
+from product_rev) ,
+top_80 as (select ITEM_NUMBER,round(annualized_rev,2) as annualized_rev_19_21 from cal_top_80 where running_sum < total*0.8
+    order by round(annualized_rev,2) desc) , */
+pentair_with_salsify as (select * from product_rev t
+    left join FWS_STAGING.STATIC_SALSIFY_BASIC s on s.GP_SKU = t.ITEM_NUMBER
+where upc is not null) ,
+market_info as (
+select gtin,min(GP_SKU),min(bc.PRICE) as market_price,min(web_price_msrp) as list_price,(min(bc.PRICE)/min(WEB_PRICE_MSRP)) as market_price_index,min(WEB_SUPER_CATEGORY) as web_super_category,min(WEB_CATEGORY) as web_category,min(WEB_SUB_CATEGORY) as web_sub_category
+From ANALYTICS.FWS_STAGING.BLACKCURVE_COMPETITOR_PRICES bc
+inner join pentair_with_salsify s on lpad(s.upc::int,14,0) = bc.gtin
+where UPDATED_AT between '5/18/2021' and '6/18/20201'
+and site_name in ('FiltersFast.com',
+'SuperWater.com',
+'KlearWaterStore.com',
+'DiscountFilterStore.com',
+'RestaurantSupply.com',
+'H2O Distributors',
+'efilters.net',
+'Serv-A-Pure',
+'Water Softeners & Filters',
+'IceMachinesPlus.com')
+ group by bc.GTIN
+    )
+select * From market_info

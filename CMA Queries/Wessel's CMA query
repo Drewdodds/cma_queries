@@ -1,0 +1,115 @@
+with bc_data as (select gtin,
+                  min(price) as market_price
+                  from ANALYTICS.FWS_STAGING.BLACKCURVE_COMPETITOR_PRICES bc
+                  where UPDATED_AT between DATEADD(Day ,-14, current_date) and current_date
+                  and SITE_NAME in (select competitor_price_name From raw.fws_tracked_competitors_pricing.competitor_tracked_list)
+                  group by GTIN), -- Gathers data from BC as well as the gitn. Prices are filtered for the bottom of the market
+
+  market_data as (select PRODUCT_ID,
+                  max(gp_sku) as gp_sku,
+                  max(gtin) as GTIN,
+                  min(market_price) as market_price,
+                  min(WEB_SUB_CATEGORY) as WEB_SUB_CATEGORY,
+                  min(WEB_SUPER_CATEGORY) as WEB_SUPER_CATEGORY,
+                  min(WEB_CATEGORY) as WEB_CATEGORY,
+                  min(VENDOR_ID) as primary_vendor,
+                  min(WEB_PRICE_MSRP) as list_price,
+                  (min(market_price)/min(WEB_PRICE_MSRP)) as market_price_index,
+                  max(VENDOR_ID) as vendor_id,
+                  min(WEB_PRICE) as web_price,
+                  min(VALID_UPC) as valid_upc,
+                  min(PRICING_ALGORITHM_CATEGORY) as pricing_algorithm_category,
+                  min(PURCHASING_MULTIPLIER) as purchasing_multiplier,
+                  min(LIST_PRICE_YEAR) as list_price_year,
+                  min(SPA_PRICING) as spa_pricing,
+                  min(s.VAR_COST) as variant_cost,
+                  min(QUANTITY) as QUANTITY,
+                  min(VENDOR_ITEM_NUMBER) as vendor_item_number
+                  from FWS_STAGING.STATIC_SALSIFY_BASIC s
+                  left join bc_data bc on GTIN = lpad(s.upc::int,14,0)
+                  group by PRODUCT_ID), -- joins salsify data back with BC (the first table)
+
+clean_market_data as (select PRODUCT_ID,
+                             gp_sku,
+                             GTIN,
+                             market_price,
+                             WEB_SUB_CATEGORY,
+                             WEB_SUPER_CATEGORY,
+                             WEB_CATEGORY,
+                             primary_vendor,
+                             list_price,
+                             web_price,
+                             market_price_index as sku_market_price_index,
+                             case when market_price_index > 1 then '>list'
+                             when market_price_index < 0.1 then '<0.1'
+                             when market_price_index is null then null
+                             else 'in-range' end as index_check,
+                             VALID_UPC,
+                             PRICING_ALGORITHM_CATEGORY,
+                             PURCHASING_MULTIPLIER,
+                             LIST_PRICE_YEAR,
+                             SPA_PRICING,
+                             VARIANT_COST,
+                             QUANTITY,
+                             vendor_item_number
+                             From market_data),
+
+v_cat_mkt_index as (select primary_vendor,
+                           WEB_CATEGORY,
+                           avg(sku_market_price_index) as cat_mi
+                           from clean_market_data
+                           where index_check = 'in-range'
+                           and sku_market_price_index>0
+                           group by primary_vendor,WEB_CATEGORY),
+
+v_subcat_mkt_index as (select primary_vendor,
+                              WEB_SUB_CATEGORY,
+                              avg(sku_market_price_index) as sub_mi
+                              from clean_market_data
+                              where index_check = 'in-range'
+                              and sku_market_price_index>0
+                              group by primary_vendor,WEB_SUB_CATEGORY),
+
+v_supercat_mkt_index as (select primary_vendor,
+                                WEB_SUPER_CATEGORY,
+                                avg(sku_market_price_index) as super_mi
+                                from clean_market_data
+                                where index_check = 'in-range'
+                                and sku_market_price_index>0
+                                group by primary_vendor,WEB_SUPER_CATEGORY)
+
+select PRODUCT_ID,
+       vendor_item_number,
+       gp_sku,
+       GTIN,
+       concat (d.WEB_SUPER_CATEGORY,' > ',d.WEB_CATEGORY,' > ',d.WEB_SUB_CATEGORY) as web_breadcrumb,
+       d.primary_vendor,
+       --PRICING_ALGORITHM_CATEGORY,
+       --LIST_PRICE_YEAR,
+       round(d.web_price,2) as current_web_price,
+       round(market_price,2) as market_price,
+       round(list_price,2) as list_price,
+       round(VARIANT_COST,2) as variant_cost,
+       round(purchasing_multiplier,5) as purchasing_multiplier,
+       SPA_PRICING,
+       case when index_check <> 'in-range' then null else round(sku_market_price_index,5) end as sku_market_price_index, -- this is on th
+       index_check as market_price_index_check,
+       coalesce(case when index_check <> 'in-range' then null else round(sku_market_price_index,5) end ,round(su.sub_mi,5),round(c.cat_mi,5),round(sp.super_mi,5)) as final_market_index,
+       case when (case when index_check <> 'in-range' then null else round(sku_market_price_index,5) end) is not null then 'SKU'
+           when su.sub_mi is not null then 'Sub Category'
+           when c.cat_mi is not null then 'Category'
+           when sp.super_mi is not null then 'Super Category' end as final_market_index_type,
+       --round(su.sub_mi,5) as sub_category_market_index,
+       --round(c.cat_mi,5) as category_market_index,
+       --round(sp.super_mi,5) as super_category_market_index,
+       round((final_market_index * list_price),2) as MARKET_PRICE,
+       round((MARKET_PRICE-web_price),2) as WEB_PRICE_DIFF,
+       round((MARKET_PRICE - variant_cost) / (case when web_price >0 then web_price else null end),2) as margin_perc
+
+from clean_market_data d
+    left join v_cat_mkt_index c on c.primary_vendor = d.primary_vendor and c.WEB_CATEGORY = d.WEB_CATEGORY
+    left join v_subcat_mkt_index su on su.primary_vendor = d.primary_vendor and su.WEB_SUB_CATEGORY = d.WEB_SUB_CATEGORY
+    left join v_supercat_mkt_index sp on sp.primary_vendor = d.primary_vendor and sp.WEB_SUPER_CATEGORY = d.WEB_SUPER_CATEGORY
+--where c.primary_vendor in ('N-PENTAIR003','N-PENTAIR004','N-PENTAIREVC','N-PENTAIRSHURFL')
+--where vendor_item_number in ('EV925267','EV925266','EV926271','EV926270','EV927076','EV927070','EV927085','EV928200','EV927151','EV927156','EV985800','EV985700','EV985500','EV929650','EV925268','EV973006','EV961211','EV961216','EV927072','EV927071','EV927086','EV927087','EV927091','EV928201','EV928203','EV927075','EV927074','EV927441','EV927446','EV985850','EV985750','EV985756','EV985550','EV985556','EV929670','EV927370','EV927377','EV927379','EV960176','EV310275','EV929775','EV997056','EV997059','EV997062','EV997063','EV997064','EV982010','EV312339','EV311652','EV900085','EV900086','EV931830','EV931840','EV937000','EV969000','EV971000','EV910024','EV910545','EV979580','EV979590','EV953412','EV953426','EV979902','EV910001','EV910002','EV910811','EV910853','EV910007','EV910008','EV910067','EV910068','EV910069','EV910071','EV910072','EV910076','EV910086')
+where ifnull(replace(replace(replace(REGEXP_SUBSTR(upper(gp_sku),':.*'),'PK',''),':',''),'FT',''),1)=1
