@@ -26,3 +26,5 @@ select ID,
 from updated_sap_records
 qualify comp_rank = 1
 order by sku asc
+
+
