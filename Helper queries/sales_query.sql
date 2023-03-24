@@ -12,7 +12,7 @@ and DOCUMENT_DATE between dateadd('year', -1, current_date) and current_date
 and ITEM_TYPE_DESC not in ('misc charge', 'flat fee')
 and ITEM_DESCRIPTION not ilike '%refund%'
 and lower(ITEM_DESCRIPTION) not ilike 'CANCELLED-DISCONTINUED%'
-and ITEM_NUMBER not in ('F-NON-INV-MISNTX' , 'F-MISNTX', 'F-FRGT', 'Test Item')
+and ITEM_NUMBER not in ('F-NON-INV-MISNTX', 'F-MISNTX', 'F-FRGT', 'Test Item')
 and ITEM_NUMBER in ()
 group by 1
 order by 2 desc
