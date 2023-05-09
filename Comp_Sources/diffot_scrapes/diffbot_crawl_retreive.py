@@ -19,3 +19,4 @@ df = pd.DataFrame.from_records(data)
 
 print(df)
 
+# need to build an extract, transform, load function for diffbot
