@@ -54,7 +54,11 @@ where SITE_NAME in ('Water Softeners & Filters',
                                 'Toboa Energy Resources',
                                 'CLR Marine',
                                 'Vita Filters',
-                                'iFilters')
+                                'iFilters',
+                                'affordablewater.us',
+                                'ProLampSales',
+                                'FactoryPure',
+                                'Rainwater Management Solutions')
 and bc.UPDATED_AT between dateadd('day', -14, current_date) and current_date
 --and GP_SKU in ()
 and s.QUANTITY = 1
